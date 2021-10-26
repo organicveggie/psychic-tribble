@@ -1,6 +1,10 @@
 package main
 
 import (
+	"os"
+
+	"github.com/apex/log"
+	"github.com/apex/log/handlers/text"
 	"github.com/organicveggie/psychic-tribble/cmd"
 )
 
@@ -12,5 +16,6 @@ var (
 )
 
 func main() {
+	log.SetHandler(text.New(os.Stderr))
 	cmd.Execute()
 }
