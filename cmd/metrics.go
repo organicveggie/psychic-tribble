@@ -13,21 +13,23 @@ import (
 	"time"
 
 	"github.com/apex/log"
+	"github.com/organicveggie/psychic-tribble/telegraf"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
 const (
-	metricTmpl = "restic_backup,machine_id=\"{{.MachineId}}\",syslog_id=\"{{.SyslogId}}\" " +
-		"invocation_id=\"{{.InvocationId}}\",files_new={{.FilesNew}},files_changed={{.FilesChanged}}," +
-		"files_unmodified={{.FilesUnmodified}},dirs_new={{.DirsNew}},dirs_changed={{.DirsChanged}}," +
-		"dirs_unmodified={{.DirsUnmodified}},total_files_processed={{.TotalFilesProcessed}}," +
-		"total_bytes_processed={{.TotalBytesProcessed}},total_duration={{.TotalDuration}}," +
-		"snapshot_id=\"{{.SnapshotId}}\",systemd_unit=\"{{.SystemdUnit}}\"," +
-		"monotonic_timestamp={{.MonotonicTimestamp}} {{.TimestampNano}}"
+	defaultDryRun      = false
+	defaultTelegrafURL = "http://localhost:8086"
+
+	flagNameDryRun      = "dryrun"
+	flagNameTelegrafURL = "telegraf_url"
 )
 
 var (
+	dryRun      bool
+	telegrafURL string
+
 	metricsCmd = &cobra.Command{
 		Use:   "metrics",
 		Short: "Generate metrics for restic-backup",
@@ -43,6 +45,17 @@ and pushes metrics to Telegraf and InfluxDB.`,
 
 func init() {
 	rootCmd.AddCommand(metricsCmd)
+
+	metricsCmd.Flags().BoolVar(&dryRun, flagNameDryRun, defaultDryRun,
+		"don't send metrics to Telegraf")
+	metricsCmd.Flags().StringVarP(&telegrafURL, flagNameTelegrafURL, "t", defaultTelegrafURL,
+		"URL for Telegraf listener")
+
+	viper.BindPFlag(flagNameDryRun, metricsCmd.Flags().Lookup(flagNameDryRun))
+	viper.BindPFlag(flagNameTelegrafURL, metricsCmd.Flags().Lookup(flagNameTelegrafURL))
+
+	viper.SetDefault(flagNameDryRun, defaultDryRun)
+	viper.SetDefault(flagNameTelegrafURL, defaultTelegrafURL)
 }
 
 func runMetrics(cmd *cobra.Command, args []string) error {
@@ -81,11 +94,39 @@ func runMetrics(cmd *cobra.Command, args []string) error {
 	for _, m := range msgs {
 		if m.Message.resticMessage.MessageType == "summary" {
 			summaryEntry = m
+			break
 		}
 	}
 
+	// Build metric tags and fields
+	tags := []telegraf.KeyValue{
+		telegraf.MakeKV("machine_id", summaryEntry.MachineId),
+		telegraf.MakeKV("syslog_id", summaryEntry.SyslogId),
+	}
+
+	rm := summaryEntry.Message.resticMessage
+	fields := []telegraf.KeyValue{
+		telegraf.MakeKV("invocation_id", summaryEntry.InvocationId),
+		telegraf.MakeKV("files_new", rm.FilesNew),
+		telegraf.MakeKV("files_changed", rm.FilesChanged),
+		telegraf.MakeKV("files_unmodified", rm.FilesUnmodified),
+		telegraf.MakeKV("dirs_new", rm.DirsNew),
+		telegraf.MakeKV("dirs_changed", rm.DirsChanged),
+		telegraf.MakeKV("dirs_unmodified", rm.DirsUnmodified),
+		telegraf.MakeKV("total_files_processed", rm.TotalFilesProcessed),
+		telegraf.MakeKV("total_bytes_processed", rm.TotalBytesProcessed),
+		telegraf.MakeKV("total_duration", rm.TotalDuration),
+		telegraf.MakeKV("snapshot_id", rm.SnapshotId),
+		telegraf.MakeKV("systemd_unit", summaryEntry.SystemdUnit),
+		telegraf.MakeKV("monotonic_timestamp", summaryEntry.MonotonicTimestamp),
+	}
+
 	// Publish metric to Telegraf
-	err = writeMetric(context.Background(), metricFromSyslogEntry(summaryEntry, time.Now()))
+	httpClient := &http.Client{}
+	telegrafClient := telegraf.NewClient(httpClient, "http://localhost:8086")
+	if err := telegrafClient.WriteMetric("restic_backup", tags, fields, time.Now()); err != nil {
+		return fmt.Errorf("error writing metrics to Telegraf: %w", err)
+	}
 
 	return err
 }
@@ -234,44 +275,4 @@ func syslogMsgFromJSON(ctx log.Interface, data []byte) (msg *syslogEntry, err er
 	}
 
 	return msg, err
-}
-
-type backupMetric struct {
-	DirsNew             uint64
-	DirsChanged         uint64
-	DirsUnmodified      uint64
-	FilesChanged        uint64
-	FilesNew            uint64
-	FilesUnmodified     uint64
-	InvocationId        string
-	MachineId           string
-	MonotonicTimestamp  uint64
-	SnapshotId          string
-	SyslogId            string
-	SystemdUnit         string
-	TotalFilesProcessed uint64
-	TotalBytesProcessed uint64
-	TotalDuration       uint64
-	TimestampNano       string
-}
-
-func metricFromSyslogEntry(s *syslogEntry, timestamp time.Time) *backupMetric {
-	return &backupMetric{
-		DirsNew:             s.Message.resticMessage.DirsNew,
-		DirsChanged:         s.Message.resticMessage.DirsChanged,
-		DirsUnmodified:      s.Message.resticMessage.DirsUnmodified,
-		FilesChanged:        s.Message.resticMessage.FilesChanged,
-		FilesNew:            s.Message.resticMessage.FilesNew,
-		FilesUnmodified:     s.Message.resticMessage.FilesUnmodified,
-		InvocationId:        s.InvocationId,
-		MachineId:           s.MachineId,
-		MonotonicTimestamp:  s.MonotonicTimestamp,
-		SnapshotId:          s.Message.resticMessage.SnapshotId,
-		SyslogId:            s.SyslogId,
-		SystemdUnit:         s.SystemdUnit,
-		TotalFilesProcessed: s.Message.resticMessage.TotalFilesProcessed,
-		TotalBytesProcessed: s.Message.resticMessage.TotalBytesProcessed,
-		TotalDuration:       s.Message.resticMessage.TotalDuration,
-		TimestampNano:       fmt.Sprint(timestamp.UnixNano()),
-	}
 }

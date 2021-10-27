@@ -19,7 +19,6 @@ var (
 	cfgFile string
 
 	unitName string
-	dryRun   bool
 	verbose  bool
 
 	rootCmd = &cobra.Command{
@@ -41,7 +40,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file")
 	rootCmd.PersistentFlags().StringVar(&unitName, flagUnitName, defaultUnit, "systemd unit name for backup job")
 	rootCmd.PersistentFlags().BoolVar(&verbose, flagVerbose, false, "print more information")
-	rootCmd.Flags().BoolVarP(&dryRun, "dryrun", "", false, "don't send metrics to Telegraf")
 
 	viper.BindPFlag(flagUnitName, rootCmd.PersistentFlags().Lookup(flagUnitName))
 	viper.BindPFlag(flagVerbose, rootCmd.PersistentFlags().Lookup(flagVerbose))
