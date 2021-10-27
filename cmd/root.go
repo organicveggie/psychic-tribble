@@ -8,18 +8,15 @@ import (
 )
 
 const (
-	defaultUnit    = "restic-backup.service"
 	defaultVerbose = false
 
-	flagUnitName = "unitname"
-	flagVerbose  = "verbose"
+	flagVerbose = "verbose"
 )
 
 var (
 	cfgFile string
 
-	unitName string
-	verbose  bool
+	verbose bool
 
 	rootCmd = &cobra.Command{
 		Use:   "psychic-tribble",
@@ -38,12 +35,9 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file")
-	rootCmd.PersistentFlags().StringVar(&unitName, flagUnitName, defaultUnit, "systemd unit name for backup job")
 	rootCmd.PersistentFlags().BoolVar(&verbose, flagVerbose, false, "print more information")
 
-	viper.BindPFlag(flagUnitName, rootCmd.PersistentFlags().Lookup(flagUnitName))
 	viper.BindPFlag(flagVerbose, rootCmd.PersistentFlags().Lookup(flagVerbose))
-	viper.SetDefault(flagUnitName, defaultUnit)
 	viper.SetDefault(flagVerbose, defaultVerbose)
 }
 

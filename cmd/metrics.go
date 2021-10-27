@@ -2,14 +2,12 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os/exec"
 	"regexp"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/apex/log"
@@ -21,14 +19,17 @@ import (
 const (
 	defaultDryRun      = false
 	defaultTelegrafURL = "http://localhost:8086"
+	defaultUnit        = "restic-backup.service"
 
 	flagNameDryRun      = "dryrun"
 	flagNameTelegrafURL = "telegraf"
+	flagNameUnitName    = "unitname"
 )
 
 var (
 	dryRun      bool
 	telegrafURL string
+	unitName    string
 
 	metricsCmd = &cobra.Command{
 		Use:   "metrics",
@@ -50,16 +51,19 @@ func init() {
 		"don't send metrics to Telegraf")
 	metricsCmd.Flags().StringVarP(&telegrafURL, flagNameTelegrafURL, "t", defaultTelegrafURL,
 		"URL for Telegraf listener in the form http://ipaddr:port")
+	metricsCmd.Flags().StringVar(&unitName, flagNameUnitName, defaultUnit, "systemd unit name for backup job")
 
 	viper.BindPFlag(flagNameDryRun, metricsCmd.Flags().Lookup(flagNameDryRun))
 	viper.BindPFlag(flagNameTelegrafURL, metricsCmd.Flags().Lookup(flagNameTelegrafURL))
+	viper.BindPFlag(flagNameUnitName, metricsCmd.Flags().Lookup(flagNameUnitName))
 
 	viper.SetDefault(flagNameDryRun, defaultDryRun)
 	viper.SetDefault(flagNameTelegrafURL, defaultTelegrafURL)
+	viper.SetDefault(flagNameUnitName, defaultUnit)
 }
 
 func runMetrics(cmd *cobra.Command, args []string) error {
-	unitName := viper.GetString(flagUnitName)
+	unitName := viper.GetString(flagNameUnitName)
 	verbose := viper.GetBool(flagVerbose)
 	if verbose {
 		log.SetLevel(log.DebugLevel)
@@ -186,28 +190,6 @@ func convertJournalLogs(ctx log.Interface, logs string) ([]*syslogEntry, error) 
 	}
 
 	return msgs, nil
-}
-
-func writeMetric(ctx context.Context, metric *backupMetric) error {
-	tmpl, err := template.New("metricTemplate").Parse(metricTmpl)
-	if err != nil {
-		return fmt.Errorf("error parsing metric template: %w", err)
-	}
-
-	b := new(strings.Builder)
-	err = tmpl.Execute(b, metric)
-	if err != nil {
-		return fmt.Errorf("error executing template: %w", err)
-	}
-
-	client := &http.Client{}
-	resp, err := client.Post("http://localhost:8086", "text", strings.NewReader(b.String()))
-	if err != nil {
-		return fmt.Errorf("error sending metrics to Telegraf: %w", err)
-	}
-	defer resp.Body.Close()
-
-	return nil
 }
 
 // {"SYSLOG_IDENTIFIER":"restic-forget.sh","__MONOTONIC_TIMESTAMP":"86509367037","PRIORITY":"6",
