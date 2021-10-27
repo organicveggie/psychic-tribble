@@ -23,7 +23,7 @@ const (
 	defaultTelegrafURL = "http://localhost:8086"
 
 	flagNameDryRun      = "dryrun"
-	flagNameTelegrafURL = "telegraf_url"
+	flagNameTelegrafURL = "telegraf"
 )
 
 var (
@@ -49,7 +49,7 @@ func init() {
 	metricsCmd.Flags().BoolVar(&dryRun, flagNameDryRun, defaultDryRun,
 		"don't send metrics to Telegraf")
 	metricsCmd.Flags().StringVarP(&telegrafURL, flagNameTelegrafURL, "t", defaultTelegrafURL,
-		"URL for Telegraf listener")
+		"URL for Telegraf listener in the form http://ipaddr:port")
 
 	viper.BindPFlag(flagNameDryRun, metricsCmd.Flags().Lookup(flagNameDryRun))
 	viper.BindPFlag(flagNameTelegrafURL, metricsCmd.Flags().Lookup(flagNameTelegrafURL))
@@ -123,7 +123,7 @@ func runMetrics(cmd *cobra.Command, args []string) error {
 
 	// Publish metric to Telegraf
 	httpClient := &http.Client{}
-	telegrafClient := telegraf.NewClient(httpClient, "http://localhost:8086")
+	telegrafClient := telegraf.NewClient(httpClient, viper.GetString(flagNameTelegrafURL))
 	if err := telegrafClient.WriteMetric("restic_backup", tags, fields, time.Now()); err != nil {
 		return fmt.Errorf("error writing metrics to Telegraf: %w", err)
 	}

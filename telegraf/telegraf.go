@@ -23,6 +23,10 @@ type Client struct {
 
 // NewClient creates a new Telegraf client from an HTTP client connection.
 func NewClient(client *http.Client, baseURL string) *Client {
+	if baseURL[len(baseURL)-1:] == "/" {
+		baseURL = baseURL[:len(baseURL)-1]
+	}
+
 	c := &Client{
 		client:     client,
 		rawBaseURL: baseURL,
