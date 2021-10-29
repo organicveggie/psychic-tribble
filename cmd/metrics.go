@@ -118,7 +118,7 @@ func runMetrics(cmd *cobra.Command, args []string) error {
 		telegraf.MakeKV("dirs_unmodified", rm.DirsUnmodified),
 		telegraf.MakeKV("total_files_processed", rm.TotalFilesProcessed),
 		telegraf.MakeKV("total_bytes_processed", rm.TotalBytesProcessed),
-		telegraf.MakeKV("total_duration", rm.TotalDuration),
+		telegraf.MakeKV("total_duration", fmt.Sprintf("%.2f", rm.TotalDuration)),
 		telegraf.MakeKV("snapshot_id", rm.SnapshotId),
 		telegraf.MakeKV("systemd_unit", summaryEntry.SystemdUnit),
 		telegraf.MakeKV("monotonic_timestamp", summaryEntry.MonotonicTimestamp),
