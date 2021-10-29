@@ -117,8 +117,10 @@ func TestSystemd(t *testing.T) {
 				execTestHelper.AddExecResult(er)
 			}
 
-			s := cmd.NewSystemd(execCommand, false, testUnitName)
-			entry, err := s.GetResticSummary()
+			systemd := cmd.NewSystemd(execCommand, testUnitName,
+				cmd.DefaultJournalctlBin, cmd.DefaultSystemctlBin)
+
+			entry, err := systemd.GetResticSummary()
 			if test.wantError {
 				if err == nil {
 					t.Errorf("GetResticSummary error mismatch. Got %v, Wanted: %v", err, test.wantError)

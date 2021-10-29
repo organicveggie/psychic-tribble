@@ -21,15 +21,24 @@ const (
 	defaultTelegrafURL = "http://localhost:8086"
 	defaultUnit        = "restic-backup.service"
 
+	DefaultJournalctlBin = "/usr/bin/journalctl"
+	DefaultSystemctlBin  = "/usr/bin/systemctl"
+
 	flagNameDryRun      = "dryrun"
 	flagNameTelegrafURL = "telegraf"
 	flagNameUnitName    = "unitname"
+
+	flagNameJournalctlBin = "journalctl"
+	flagNameSystemctlBin  = "systemctl"
 )
 
 var (
 	dryRun      bool
 	telegrafURL string
 	unitName    string
+
+	flagJournalctlBin string
+	flagSystemctlBin  string
 
 	metricsCmd = &cobra.Command{
 		Use:   "metrics",
@@ -53,15 +62,27 @@ func init() {
 		"don't send metrics to Telegraf")
 	metricsCmd.Flags().StringVarP(&telegrafURL, flagNameTelegrafURL, "t", defaultTelegrafURL,
 		"URL for Telegraf listener in the form http://ipaddr:port")
-	metricsCmd.Flags().StringVar(&unitName, flagNameUnitName, defaultUnit, "systemd unit name for backup job")
+	metricsCmd.Flags().StringVar(&unitName, flagNameUnitName, defaultUnit,
+		"systemd unit name for backup job")
+
+	metricsCmd.Flags().StringVar(&flagJournalctlBin, flagNameJournalctlBin, DefaultJournalctlBin,
+		"full pathname for journalctl binary")
+	metricsCmd.Flags().StringVar(&flagSystemctlBin, flagNameSystemctlBin, DefaultSystemctlBin,
+		"full pathname for systemctl binary")
 
 	viper.BindPFlag(flagNameDryRun, metricsCmd.Flags().Lookup(flagNameDryRun))
 	viper.BindPFlag(flagNameTelegrafURL, metricsCmd.Flags().Lookup(flagNameTelegrafURL))
 	viper.BindPFlag(flagNameUnitName, metricsCmd.Flags().Lookup(flagNameUnitName))
 
+	viper.BindPFlag(flagNameJournalctlBin, metricsCmd.Flags().Lookup(flagNameJournalctlBin))
+	viper.BindPFlag(flagNameSystemctlBin, metricsCmd.Flags().Lookup(flagNameSystemctlBin))
+
 	viper.SetDefault(flagNameDryRun, defaultDryRun)
 	viper.SetDefault(flagNameTelegrafURL, defaultTelegrafURL)
 	viper.SetDefault(flagNameUnitName, defaultUnit)
+
+	viper.SetDefault(flagNameJournalctlBin, DefaultJournalctlBin)
+	viper.SetDefault(flagNameSystemctlBin, DefaultSystemctlBin)
 }
 
 func runMetrics(cmd *cobra.Command, args []string) error {
@@ -71,7 +92,10 @@ func runMetrics(cmd *cobra.Command, args []string) error {
 		log.SetLevel(log.DebugLevel)
 	}
 
-	systemd := NewSystemd(exec.Command, verbose, unitName)
+	journalctlBin := viper.GetString(flagNameJournalctlBin)
+	systemctlBin := viper.GetString(flagNameSystemctlBin)
+
+	systemd := NewSystemd(exec.Command, unitName, journalctlBin, systemctlBin)
 	summaryEntry, err := systemd.GetResticSummary()
 	if err != nil {
 		return err
@@ -113,14 +137,17 @@ func runMetrics(cmd *cobra.Command, args []string) error {
 type systemdRunner struct {
 	cmdContext execContext
 	unitName   string
-	verbose    bool
+
+	journalctlBin string
+	systemctlBin  string
 }
 
-func NewSystemd(cmdContext execContext, verbose bool, unitName string) *systemdRunner {
+func NewSystemd(cmdContext execContext, unitName string, journalctl string, systemctl string) *systemdRunner {
 	return &systemdRunner{
-		cmdContext: cmdContext,
-		unitName:   unitName,
-		verbose:    verbose,
+		cmdContext:    cmdContext,
+		unitName:      unitName,
+		journalctlBin: journalctl,
+		systemctlBin:  systemctl,
 	}
 }
 
@@ -132,7 +159,6 @@ func (s *systemdRunner) GetResticSummary() (entry *SyslogEntry, err error) {
 	}
 	log.Infof("InvocationID: %q", id)
 
-	log.Infof("InvocationID: %q", id)
 	logCtx := log.WithField("invocation_id", id)
 
 	// Retrieve logs from last invocation
@@ -163,7 +189,7 @@ func (s *systemdRunner) GetResticSummary() (entry *SyslogEntry, err error) {
 func (s *systemdRunner) getLastInvocationId() (id string, err error) {
 	ctx := log.WithField("unit_name", s.unitName)
 
-	c := s.cmdContext("/usr/bin/systemctl", "show", "-p", "InvocationID", "--value", s.unitName)
+	c := s.cmdContext(s.systemctlBin, "show", "-p", "InvocationID", "--value", s.unitName)
 	ctx.Debugf("Command: %s", c.String())
 
 	var out bytes.Buffer
@@ -178,14 +204,15 @@ func (s *systemdRunner) getLastInvocationId() (id string, err error) {
 
 func (s *systemdRunner) getJournalLogs(ctx log.Interface, invocationId string) (logs string, err error) {
 	filter := fmt.Sprintf("_SYSTEMD_INVOCATION_ID=%s", invocationId)
-	c := s.cmdContext("/usr/bin/journalctl", "-o", "short-iso", filter, "--output", "json")
+	c := s.cmdContext(s.journalctlBin, "-o", "short-iso", filter, "--output", "json")
 	ctx.Debugf("Commnand: %q", c.String())
 
 	var out bytes.Buffer
 	c.Stdout = &out
 	c.Stderr = &out
 	if err = c.Run(); err != nil {
-		return "", fmt.Errorf("error running journalctl for InvocationId %s: %w", invocationId, err)
+		return "", fmt.Errorf("error running %s for InvocationId %s: %w",
+			s.journalctlBin, invocationId, err)
 	}
 
 	return out.String(), nil
