@@ -44,6 +44,8 @@ and pushes metrics to Telegraf and InfluxDB.`,
 	syslogMsgRegEx = regexp.MustCompile(`^"(?P<message>.+)"$`)
 )
 
+type execContext = func(name string, arg ...string) *exec.Cmd
+
 func init() {
 	rootCmd.AddCommand(metricsCmd)
 
@@ -69,37 +71,10 @@ func runMetrics(cmd *cobra.Command, args []string) error {
 		log.SetLevel(log.DebugLevel)
 	}
 
-	// Retrieve last invocation of backup
-	id, err := getLastInvocationId(unitName, verbose)
+	systemd := NewSystemd(exec.Command, verbose, unitName)
+	summaryEntry, err := systemd.GetResticSummary()
 	if err != nil {
 		return err
-	}
-
-	log.Infof("InvocationID: %q", id)
-	logCtx := log.WithField("invocation_id", id)
-
-	// Retrieve logs from last invocation
-	logs, err := getJournalLogs(logCtx, id)
-	if err != nil {
-		return err
-	}
-
-	msgs, err := convertJournalLogs(logCtx, logs)
-	if err != nil {
-		return err
-	}
-	if len(msgs) == 0 {
-		return fmt.Errorf("no journal logs found for InvocationId %s", id)
-	}
-	log.Infof("Found %d log messages", len(msgs))
-
-	// Find the summary data record
-	var summaryEntry *syslogEntry
-	for _, m := range msgs {
-		if m.Message.resticMessage.MessageType == "summary" {
-			summaryEntry = m
-			break
-		}
 	}
 
 	// Build metric tags and fields
@@ -108,7 +83,7 @@ func runMetrics(cmd *cobra.Command, args []string) error {
 		telegraf.MakeKV("syslog_id", summaryEntry.SyslogId),
 	}
 
-	rm := summaryEntry.Message.resticMessage
+	rm := summaryEntry.Message.ResticMessage
 	fields := []telegraf.KeyValue{
 		telegraf.MakeKV("invocation_id", summaryEntry.InvocationId),
 		telegraf.MakeKV("files_new", rm.FilesNew),
@@ -135,10 +110,60 @@ func runMetrics(cmd *cobra.Command, args []string) error {
 	return err
 }
 
-func getLastInvocationId(unitName string, verbose bool) (id string, err error) {
-	ctx := log.WithField("unit_name", unitName)
+type systemdRunner struct {
+	cmdContext execContext
+	unitName   string
+	verbose    bool
+}
 
-	c := exec.Command("/usr/bin/systemctl", "show", "-p", "InvocationID", "--value", unitName)
+func NewSystemd(cmdContext execContext, verbose bool, unitName string) *systemdRunner {
+	return &systemdRunner{
+		cmdContext: cmdContext,
+		unitName:   unitName,
+		verbose:    verbose,
+	}
+}
+
+func (s *systemdRunner) GetResticSummary() (entry *SyslogEntry, err error) {
+	// Retrieve last invocation of backup
+	id, err := s.getLastInvocationId()
+	if err != nil {
+		return nil, err
+	}
+	log.Infof("InvocationID: %q", id)
+
+	log.Infof("InvocationID: %q", id)
+	logCtx := log.WithField("invocation_id", id)
+
+	// Retrieve logs from last invocation
+	logs, err := s.getJournalLogs(logCtx, id)
+	if err != nil {
+		return entry, err
+	}
+
+	msgs, err := s.convertJournalLogs(logCtx, logs)
+	if err != nil {
+		return entry, err
+	}
+	if len(msgs) == 0 {
+		return entry, fmt.Errorf("no journal logs found for InvocationId %s", id)
+	}
+	log.Infof("Found %d log messages", len(msgs))
+
+	for _, m := range msgs {
+		if m.Message.ResticMessage != nil && m.Message.ResticMessage.MessageType == "summary" {
+			entry = m
+			break
+		}
+	}
+
+	return entry, err
+}
+
+func (s *systemdRunner) getLastInvocationId() (id string, err error) {
+	ctx := log.WithField("unit_name", s.unitName)
+
+	c := s.cmdContext("/usr/bin/systemctl", "show", "-p", "InvocationID", "--value", s.unitName)
 	ctx.Debugf("Command: %s", c.String())
 
 	var out bytes.Buffer
@@ -151,9 +176,9 @@ func getLastInvocationId(unitName string, verbose bool) (id string, err error) {
 	return strings.TrimSpace(out.String()), nil
 }
 
-func getJournalLogs(ctx log.Interface, invocationId string) (logs string, err error) {
+func (s *systemdRunner) getJournalLogs(ctx log.Interface, invocationId string) (logs string, err error) {
 	filter := fmt.Sprintf("_SYSTEMD_INVOCATION_ID=%s", invocationId)
-	c := exec.Command("/usr/bin/journalctl", "-o", "short-iso", filter, "--output", "json")
+	c := s.cmdContext("/usr/bin/journalctl", "-o", "short-iso", filter, "--output", "json")
 	ctx.Debugf("Commnand: %q", c.String())
 
 	var out bytes.Buffer
@@ -166,14 +191,14 @@ func getJournalLogs(ctx log.Interface, invocationId string) (logs string, err er
 	return out.String(), nil
 }
 
-func convertJournalLogs(ctx log.Interface, logs string) ([]*syslogEntry, error) {
+func (s *systemdRunner) convertJournalLogs(ctx log.Interface, logs string) ([]*SyslogEntry, error) {
 	logLines := strings.Split(logs, "\n")
 	if len(logLines) == 0 {
 		log.Warnf("Problem processing log messages: %s", logs)
 		return nil, fmt.Errorf("empty log messages")
 	}
 
-	msgs := make([]*syslogEntry, 0, len(logLines))
+	msgs := make([]*SyslogEntry, 0, len(logLines))
 	for _, line := range logLines {
 		cleanLine := strings.TrimSpace(line)
 		if cleanLine == "" {
@@ -192,69 +217,76 @@ func convertJournalLogs(ctx log.Interface, logs string) ([]*syslogEntry, error) 
 	return msgs, nil
 }
 
-// {"SYSLOG_IDENTIFIER":"restic-forget.sh","__MONOTONIC_TIMESTAMP":"86509367037","PRIORITY":"6",
-// "_CMDLINE":"/bin/bash /usr/local/sbin/restic-forget.sh","_SYSTEMD_INVOCATION_ID":"49ea307296c74e3fa1365dd62862f69e",
-//"_SYSTEMD_UNIT":"restic-backup.service","_COMM":"restic-forget.s","_UID":"0","_MACHINE_ID":"f4995a7ba0ad462a999441ac1c4dde5e",
-// "_SYSTEMD_CGROUP":"/system.slice/restic-backup.service","MESSAGE":"Finished restic snapshot removal","_TRANSPORT":"stdout",
-// "SYSLOG_FACILITY":"3","_EXE":"/usr/bin/bash","_GID":"0","_SYSTEMD_SLICE":"system.slice","_HOSTNAME":"Z97X-UD5H","_PID":"338731",
-// "_BOOT_ID":"9d572844f08843b2988fe83d5dfea7ec","_SELINUX_CONTEXT":"unconfined\n","_STREAM_ID":"bf3a79979ab34b16bb2323963da67f82",
-// "__CURSOR":"s=758865288d214086be7ab7f33762d9ec;i=22a0;b=9d572844f08843b2988fe83d5dfea7ec;m=14245c2efd;t=5cf3552f84f6b;x=5d5942d128b745a8",
-// "__REALTIME_TIMESTAMP":"1635202815774571","_CAP_EFFECTIVE":"3bfffeffff"}
-type syslogEntry struct {
-	SyslogId           string        `json:"SYSLOG_IDENTIFIER"`
-	MonotonicTimestamp uint64        `json:"__MONOTONIC_TIMESTAMP,string"`
-	InvocationId       string        `json:"_SYSTEMD_INVOCATION_ID"`
-	SystemdUnit        string        `json:"_SYSTEMD_UNIT"`
-	MachineId          string        `json:"_MACHINE_ID"`
-	Hostname           string        `json:"_HOSTNAME"`
-	Message            syslogMessage `json:"MESSAGE,omitempty"`
+// SyslogEntry contains the contents of a single systemd journal entry.
+type SyslogEntry struct {
+	SyslogId           string         `json:"SYSLOG_IDENTIFIER"`
+	MonotonicTimestamp uint64         `json:"__MONOTONIC_TIMESTAMP,string"`
+	InvocationId       string         `json:"_SYSTEMD_INVOCATION_ID"`
+	SystemdUnit        string         `json:"_SYSTEMD_UNIT"`
+	MachineId          string         `json:"_MACHINE_ID"`
+	Hostname           string         `json:"_HOSTNAME"`
+	Message            MessageWrapper `json:"MESSAGE,omitempty"`
 }
 
-type syslogMessage struct {
-	message       string
-	resticMessage resticMsg
+// MessageWrap handles intercepting MESSAGE field values.
+type MessageWrapper struct {
+	RawText       string
+	ResticMessage *ResticMsg
 }
 
-// "{\"message_type\":\"summary\",\"files_new\":0,\"files_changed\":4,\"files_unmodified\":68439,
-// \"dirs_new\":0,\"dirs_changed\":7,\"dirs_unmodified\":18213,
-// \"data_blobs\":3,\"tree_blobs\":8,\"data_added\":970764,
-// \"total_files_processed\":68443,\"total_bytes_processed\":2770780704,\"total_duration\":5.900547246,
-// \"snapshot_id\":\"78c5a2c5\"}"
-type resticMsg struct {
-	MessageType         string `json:"message_type"`
-	FilesNew            uint64 `json:"files_new"`
-	FilesChanged        uint64 `json:"files_changed"`
-	FilesUnmodified     uint64 `json:"files_unmodified"`
-	DirsNew             uint64 `json:"dirs_new"`
-	DirsChanged         uint64 `json:"dirs_changed"`
-	DirsUnmodified      uint64 `json:"dirs_unmodified"`
-	TotalFilesProcessed uint64 `json:"total_files_processed"`
-	TotalBytesProcessed uint64 `json:"total_bytes_processed"`
-	TotalDuration       uint64 `json:"total_duration"`
-	SnapshotId          string `json:"snapshot_id"`
+// ResticMsg contains the data from parsed JSON output by the restic backup tool.
+type ResticMsg struct {
+	MessageType         string  `json:"message_type"`
+	FilesNew            uint64  `json:"files_new"`
+	FilesChanged        uint64  `json:"files_changed"`
+	FilesUnmodified     uint64  `json:"files_unmodified"`
+	DirsNew             uint64  `json:"dirs_new"`
+	DirsChanged         uint64  `json:"dirs_changed"`
+	DirsUnmodified      uint64  `json:"dirs_unmodified"`
+	TotalFilesProcessed uint64  `json:"total_files_processed"`
+	TotalBytesProcessed uint64  `json:"total_bytes_processed"`
+	TotalDuration       float64 `json:"total_duration"`
+	SnapshotId          string  `json:"snapshot_id"`
 }
 
-func (sm *syslogMessage) UnmarshalJSON(data []byte) (err error) {
-	if len(data) == 0 {
-		return nil
+func (mw *MessageWrapper) UnmarshalJSON(data []byte) (err error) {
+	txt := string(data)
+	if txt == "" {
+		return err
 	}
 
-	sm.message = strings.ReplaceAll(string(data), `\"`, `"`)
-	if syslogMsgRegEx.MatchString(sm.message) {
-		sm.message = syslogMsgRegEx.ReplaceAllString(sm.message, "$message")
+	rm := resticMessageFromJSON(txt)
+	if rm == nil {
+		mw.RawText = txt
+	} else {
+		mw.ResticMessage = rm
 	}
-
-	if err := json.Unmarshal([]byte(sm.message), &sm.resticMessage); err == nil {
-		sm.message = ""
-	}
-	return nil
+	return err
 }
 
-func syslogMsgFromJSON(ctx log.Interface, data []byte) (msg *syslogEntry, err error) {
-	msg = new(syslogEntry)
+func syslogMsgFromJSON(ctx log.Interface, data []byte) (msg *SyslogEntry, err error) {
+	msg = new(SyslogEntry)
 	if err = json.Unmarshal(data, msg); err != nil {
 		return nil, fmt.Errorf("unable to unmarshal JSON: %w", err)
 	}
 
 	return msg, err
+}
+
+func resticMessageFromJSON(messageTxt string) *ResticMsg {
+	if messageTxt == "" {
+		return nil
+	}
+
+	messageTxt = strings.ReplaceAll(string(messageTxt), `\"`, `"`)
+	if syslogMsgRegEx.MatchString(messageTxt) {
+		messageTxt = syslogMsgRegEx.ReplaceAllString(messageTxt, "$message")
+	}
+
+	msg := new(ResticMsg)
+	if err := json.Unmarshal([]byte(messageTxt), msg); err != nil {
+		msg = nil
+	}
+
+	return msg
 }
