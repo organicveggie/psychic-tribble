@@ -74,6 +74,10 @@ func (kv KeyValue) ToString() (string, error) {
 		b.WriteString(fmt.Sprint(vv))
 	case uint64:
 		b.WriteString(fmt.Sprint(vv))
+	case float32:
+		b.WriteString(fmt.Sprint(vv))
+	case float64:
+		b.WriteString(fmt.Sprint(vv))
 	default:
 		return "", fmt.Errorf("unsupported type: %#v", vv)
 	}

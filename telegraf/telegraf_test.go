@@ -43,13 +43,22 @@ func TestWriteMetric(t *testing.T) {
 			wantErr:   true,
 		},
 		{
-			name:      "OneField",
+			name:      "OneStrringField",
 			metric:    "test-metric",
 			tags:      make([]telegraf.KeyValue, 0),
 			fields:    []telegraf.KeyValue{telegraf.MakeKV("key", "value")},
 			timestamp: time1,
 			wantErr:   false,
 			wantReq:   fmt.Sprintf("test-metric key=\"value\" %d", time1.UnixNano()),
+		},
+		{
+			name:      "OneFloatField",
+			metric:    "test-metric",
+			tags:      make([]telegraf.KeyValue, 0),
+			fields:    []telegraf.KeyValue{telegraf.MakeKV("key", 6.08135)},
+			timestamp: time1,
+			wantErr:   false,
+			wantReq:   fmt.Sprintf("test-metric key=6.08135 %d", time1.UnixNano()),
 		},
 		{
 			name:   "TwoFields",
