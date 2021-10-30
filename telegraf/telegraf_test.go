@@ -121,7 +121,7 @@ func TestWriteMetric(t *testing.T) {
 			// Close the server when test finishes
 			defer server.Close()
 
-			tc := telegraf.NewClient(server.Client(), server.URL)
+			tc := telegraf.NewClient(server.Client(), server.URL, false)
 			err := tc.WriteMetric(test.metric, test.tags, test.fields, test.timestamp)
 			if test.wantErr != (err != nil) {
 				t.Errorf("WriteMetric() error mismatch. expected: %t, got: %v", test.wantErr, err)
