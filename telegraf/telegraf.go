@@ -16,18 +16,20 @@ const (
 )
 
 type Client struct {
+	dryRun     bool
 	client     *http.Client
 	rawBaseURL string // base URL of form http://ipaddr:port with no trailing slash
 	baseURL    *url.URL
 }
 
 // NewClient creates a new Telegraf client from an HTTP client connection.
-func NewClient(client *http.Client, baseURL string) *Client {
+func NewClient(client *http.Client, baseURL string, dryRun bool) *Client {
 	if baseURL[len(baseURL)-1:] == "/" {
 		baseURL = baseURL[:len(baseURL)-1]
 	}
 
 	c := &Client{
+		dryRun:     dryRun,
 		client:     client,
 		rawBaseURL: baseURL,
 	}
@@ -128,6 +130,13 @@ func (c *Client) WriteMetric(metric string, tags []KeyValue, fields []KeyValue,
 	metricURL, err := c.baseURL.Parse(metricURLPath)
 	if err != nil {
 		return fmt.Errorf("unexpected error parsing URL path %q: %w", metricURLPath, err)
+	}
+
+	if c.dryRun {
+		log.Infof("Dry Run enabled, skipping HTTP POST step.")
+		log.Infof("Dry Run URL: %s", metricURL.String())
+		log.Infof("Dry Run metric: %s", b.String())
+		return nil
 	}
 
 	resp, err := c.client.Post(metricURL.String(), contentType, strings.NewReader(b.String()))

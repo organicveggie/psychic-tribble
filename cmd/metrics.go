@@ -124,9 +124,11 @@ func runMetrics(cmd *cobra.Command, args []string) error {
 		telegraf.MakeKV("monotonic_timestamp", summaryEntry.MonotonicTimestamp),
 	}
 
+	dryRun := viper.GetBool(flagNameDryRun)
+
 	// Publish metric to Telegraf
 	httpClient := &http.Client{}
-	telegrafClient := telegraf.NewClient(httpClient, viper.GetString(flagNameTelegrafURL))
+	telegrafClient := telegraf.NewClient(httpClient, viper.GetString(flagNameTelegrafURL), dryRun)
 	if err := telegrafClient.WriteMetric("restic_backup", tags, fields, time.Now()); err != nil {
 		return fmt.Errorf("error writing metrics to Telegraf: %w", err)
 	}
