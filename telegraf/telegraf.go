@@ -138,6 +138,8 @@ func (c *Client) WriteMetric(metric string, tags []KeyValue, fields []KeyValue,
 		log.Infof("Dry Run metric: %s", b.String())
 		return nil
 	}
+	log.Debugf("Telegraf URL: %s", metricURL.String())
+	log.Debugf("Telegraff metric: %s", b.String())
 
 	resp, err := c.client.Post(metricURL.String(), contentType, strings.NewReader(b.String()))
 	if err != nil {
