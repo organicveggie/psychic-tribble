@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"os/exec"
 	"regexp"
@@ -118,7 +119,8 @@ func runMetrics(cmd *cobra.Command, args []string) error {
 		telegraf.MakeKV("dirs_unmodified", rm.DirsUnmodified),
 		telegraf.MakeKV("total_files_processed", rm.TotalFilesProcessed),
 		telegraf.MakeKV("total_bytes_processed", rm.TotalBytesProcessed),
-		telegraf.MakeKV("total_duration", fmt.Sprintf("%.2f", rm.TotalDuration)),
+		// Round to two decimal places
+		telegraf.MakeKV("total_duration", math.Round(rm.TotalDuration*100)/100),
 		telegraf.MakeKV("snapshot_id", rm.SnapshotId),
 		telegraf.MakeKV("systemd_unit", summaryEntry.SystemdUnit),
 		telegraf.MakeKV("monotonic_timestamp", summaryEntry.MonotonicTimestamp),
@@ -132,6 +134,7 @@ func runMetrics(cmd *cobra.Command, args []string) error {
 	if err := telegrafClient.WriteMetric("restic_backup", tags, fields, time.Now()); err != nil {
 		return fmt.Errorf("error writing metrics to Telegraf: %w", err)
 	}
+	log.Info("Successfully wrote metric to Telegraff.")
 
 	return err
 }
